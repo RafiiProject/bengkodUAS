@@ -12,6 +12,20 @@ $resultMhs = $stmtMhs->get_result();
 $dataMhs = $resultMhs->fetch_assoc();
 $stmtMhs->close();
 
+// Menentukan batas maksimal SKS berdasarkan IPK
+$ipk = floatval($dataMhs['ipk']);
+$maxSKS = $ipk < 3 ? 20 : 24;
+
+// Menghitung total SKS yang sudah diambil
+$queryTotalSKS = "SELECT SUM(sks) AS total_sks FROM jwl_mhs WHERE mhs_id = ?";
+$stmtTotalSKS = $conn->prepare($queryTotalSKS);
+$stmtTotalSKS->bind_param("i", $idMhs);
+$stmtTotalSKS->execute();
+$resultTotalSKS = $stmtTotalSKS->get_result();
+$rowTotalSKS = $resultTotalSKS->fetch_assoc();
+$totalSKS = $rowTotalSKS['total_sks'] ?? 0;
+$stmtTotalSKS->close();
+
 // Mendapatkan daftar mata kuliah
 $queryMatkul = "SELECT * FROM jwl_matakuliah";
 $resultMatkul = $conn->query($queryMatkul);
@@ -26,84 +40,50 @@ $stmtKrs->close();
 
 // Menangani form tambah mata kuliah
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    $idMatkul = $_POST['id_matkul'];
-    $idMatkul = intval($idMatkul);
-    $queryIdMatkul = "SELECT * FROM jwl_matakuliah WHERE id = $idMatkul";
-    $resultIdMatkul = $conn->query($queryIdMatkul);
+    $idMatkul = intval($_POST['id_matkul']);
+
+    // Mendapatkan data mata kuliah yang dipilih
+    $queryIdMatkul = "SELECT * FROM jwl_matakuliah WHERE id = ?";
+    $stmtIdMatkul = $conn->prepare($queryIdMatkul);
+    $stmtIdMatkul->bind_param("i", $idMatkul);
+    $stmtIdMatkul->execute();
+    $resultIdMatkul = $stmtIdMatkul->get_result();
     $rowIdMatkul = $resultIdMatkul->fetch_assoc();
+    $stmtIdMatkul->close();
+
     $Matkul = $rowIdMatkul['matakuliah'];
-    $sks = $rowIdMatkul['sks'];
+    $sks = intval($rowIdMatkul['sks']);
     $kelp = $rowIdMatkul['kelp'];
     $ruangan = $rowIdMatkul['ruangan'];
 
-    $conn->begin_transaction();
-    try {
-        $insertKrs = "INSERT INTO jwl_mhs (mhs_id, matakuliah, sks, kelp, ruangan) VALUES (?, ?, ?, ?, ?)";
-        $stmtInsert = $conn->prepare($insertKrs);
-        $stmtInsert->bind_param("isiss", $idMhs, $Matkul, $sks, $kelp, $ruangan);
-
-        if (!$stmtInsert->execute()) {
-            throw new Exception("Gagal menambahkan mata kuliah: " . $stmtInsert->error);
-        }
-
-        $insertInputmhs = "UPDATE inputmhs JOIN (
-            SELECT mhs_id, GROUP_CONCAT(matakuliah SEPARATOR ', ') AS matakuliah 
-            FROM jwl_mhs GROUP BY mhs_id
-        ) AS subquery ON inputmhs.id = subquery.mhs_id
-        SET inputmhs.matakuliah = subquery.matakuliah;";
-
-        if (!$conn->query($insertInputmhs)) {
-            throw new Exception("Gagal memperbarui tabel inputmhs: " . $conn->error);
-        }
-
-        $conn->commit();
-        $successMessage = "Mata kuliah berhasil ditambahkan.";
-    } catch (Exception $e) {
-        $conn->rollback();
-        $errorMessage = $e->getMessage();
-    }
-
-    $stmtInsert->close();
-    header("Location: edit_mhs.php?id=$idMhs");
-    exit;
-}
-
-// Menangani hapus mata kuliah dari KRS
-if (isset($_GET['hapus'])) {
-    if (isset($_GET['id'])) {
-        $idKrs = intval($_GET['hapus']);
-        $idMhs = intval($_GET['id']);
-
+    // Validasi SKS
+    if ($totalSKS + $sks > $maxSKS) {
+        $errorMessage = "Jumlah SKS melebihi batas maksimal ($maxSKS SKS).";
+    } else {
         $conn->begin_transaction();
         try {
-            $deleteKrs = "DELETE FROM jwl_mhs WHERE id = ?";
-            $stmtDelete = $conn->prepare($deleteKrs);
-            $stmtDelete->bind_param("i", $idKrs);
+            $insertKrs = "INSERT INTO jwl_mhs (mhs_id, matakuliah, sks, kelp, ruangan) VALUES (?, ?, ?, ?, ?)";
+            $stmtInsert = $conn->prepare($insertKrs);
+            $stmtInsert->bind_param("isiss", $idMhs, $Matkul, $sks, $kelp, $ruangan);
 
-            if (!$stmtDelete->execute()) {
-                throw new Exception("Gagal menghapus mata kuliah: " . $stmtDelete->error);
+            if (!$stmtInsert->execute()) {
+                throw new Exception("Gagal menambahkan mata kuliah: " . $stmtInsert->error);
             }
 
-            $stmtDelete->close();
+            $stmtInsert->close();
 
-            $updateInputmhs = "UPDATE inputmhs 
-                LEFT JOIN (
-                    SELECT mhs_id, GROUP_CONCAT(matakuliah SEPARATOR ', ') AS matakuliah 
-                    FROM jwl_mhs GROUP BY mhs_id
-                ) AS subquery ON inputmhs.id = subquery.mhs_id
-                SET inputmhs.matakuliah = COALESCE(subquery.matakuliah, '') 
-                WHERE inputmhs.id = ?";
+            $updateInputmhs = "UPDATE inputmhs JOIN (
+                SELECT mhs_id, GROUP_CONCAT(matakuliah SEPARATOR ', ') AS matakuliah 
+                FROM jwl_mhs GROUP BY mhs_id
+            ) AS subquery ON inputmhs.id = subquery.mhs_id
+            SET inputmhs.matakuliah = subquery.matakuliah;";
 
-            $stmtUpdate = $conn->prepare($updateInputmhs);
-            $stmtUpdate->bind_param("i", $idMhs);
-
-            if (!$stmtUpdate->execute()) {
-                throw new Exception("Gagal memperbarui tabel inputmhs: " . $stmtUpdate->error);
+            if (!$conn->query($updateInputmhs)) {
+                throw new Exception("Gagal memperbarui tabel inputmhs: " . $conn->error);
             }
 
-            $stmtUpdate->close();
             $conn->commit();
-            $successMessage = "Mata kuliah berhasil dihapus.";
+            $successMessage = "Mata kuliah berhasil ditambahkan.";
         } catch (Exception $e) {
             $conn->rollback();
             $errorMessage = $e->getMessage();
@@ -111,10 +91,50 @@ if (isset($_GET['hapus'])) {
 
         header("Location: edit_mhs.php?id=$idMhs");
         exit;
-    } else {
-        echo "Error: 'id' parameter is missing.";
-        exit;
     }
+}
+
+// Menangani hapus mata kuliah dari KRS
+if (isset($_GET['hapus'])) {
+    $idKrs = intval($_GET['hapus']);
+
+    $conn->begin_transaction();
+    try {
+        $deleteKrs = "DELETE FROM jwl_mhs WHERE id = ?";
+        $stmtDelete = $conn->prepare($deleteKrs);
+        $stmtDelete->bind_param("i", $idKrs);
+
+        if (!$stmtDelete->execute()) {
+            throw new Exception("Gagal menghapus mata kuliah: " . $stmtDelete->error);
+        }
+
+        $stmtDelete->close();
+
+        $updateInputmhs = "UPDATE inputmhs 
+            LEFT JOIN (
+                SELECT mhs_id, GROUP_CONCAT(matakuliah SEPARATOR ', ') AS matakuliah 
+                FROM jwl_mhs GROUP BY mhs_id
+            ) AS subquery ON inputmhs.id = subquery.mhs_id
+            SET inputmhs.matakuliah = COALESCE(subquery.matakuliah, '') 
+            WHERE inputmhs.id = ?";
+
+        $stmtUpdate = $conn->prepare($updateInputmhs);
+        $stmtUpdate->bind_param("i", $idMhs);
+
+        if (!$stmtUpdate->execute()) {
+            throw new Exception("Gagal memperbarui tabel inputmhs: " . $stmtUpdate->error);
+        }
+
+        $stmtUpdate->close();
+        $conn->commit();
+        $successMessage = "Mata kuliah berhasil dihapus.";
+    } catch (Exception $e) {
+        $conn->rollback();
+        $errorMessage = $e->getMessage();
+    }
+
+    header("Location: edit_mhs.php?id=$idMhs");
+    exit;
 }
 ?>
 
@@ -157,10 +177,17 @@ if (isset($_GET['hapus'])) {
                 <h1>Edit Mahasiswa</h1>
             </div>
             <div class="card-body">
+                <?php if (isset($errorMessage)) { ?>
+                    <div class="alert alert-danger"> <?php echo $errorMessage; ?> </div>
+                <?php } ?>
+                <?php if (isset($successMessage)) { ?>
+                    <div class="alert alert-success"> <?php echo $successMessage; ?> </div>
+                <?php } ?>
                 <div class="alert alert-info">
                     <strong>Nama:</strong> <?php echo $dataMhs['namaMhs']; ?> |
                     <strong>NIM:</strong> <?php echo $dataMhs['nim']; ?> |
-                    <strong>IPK:</strong> <?php echo $dataMhs['ipk']; ?>
+                    <strong>IPK:</strong> <?php echo $dataMhs['ipk']; ?> |
+                    <strong>Total SKS:</strong> <?php echo $totalSKS; ?> / <?php echo $maxSKS; ?>
                 </div>
                 <form method="POST" class="mb-4">
                     <div class="row g-3">
@@ -221,4 +248,3 @@ if (isset($_GET['hapus'])) {
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons/font/bootstrap-icons.css">
 </body>
 </html>
-

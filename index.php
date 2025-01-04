@@ -32,6 +32,14 @@ include('koneksi.php'); // Koneksi ke database
             height: 32px;
             border-radius: 50%;
         }
+        .matkul-list {
+            text-align: left;
+            padding-left: 10px;
+            margin: 0;
+        }
+        .matkul-list li {
+            margin-bottom: 3px;
+        }
     </style>
 </head>
 <body>
@@ -96,20 +104,54 @@ include('koneksi.php'); // Koneksi ke database
                     </thead>
                     <tbody>
                         <?php
-                        $result = $conn->query("SELECT * FROM inputmhs");
+                        $query = "
+                            SELECT 
+                                m.id AS mhs_id, 
+                                m.namaMhs, 
+                                m.ipk, 
+                                m.sks AS max_sks, 
+                                GROUP_CONCAT(CONCAT(j.matakuliah, ' (', j.sks, ' SKS)') SEPARATOR '|') AS matakuliah
+                            FROM 
+                                inputmhs m
+                            LEFT JOIN 
+                                jwl_mhs j ON m.id = j.mhs_id
+                            GROUP BY 
+                                m.id
+                        ";
+                        $result = $conn->query($query);
                         $no = 1;
+
                         while ($row = $result->fetch_assoc()) {
-                            $matakuliah = $row['matakuliah'] ?: "-";
+                            $matakuliahList = $row['matakuliah'] 
+                                ? explode('|', $row['matakuliah']) 
+                                : ["-"];
+                            
+                            // Batasi hanya 3 mata kuliah pertama
+                            $limitedMatkul = array_slice($matakuliahList, 0, 3);
+                            $remainingMatkulCount = count($matakuliahList) - 3;
+
                             echo "<tr>
                                 <td>{$no}</td>
                                 <td>{$row['namaMhs']}</td>
                                 <td>{$row['ipk']}</td>
-                                <td>{$row['sks']}</td>
-                                <td>{$matakuliah}</td>
+                                <td>{$row['max_sks']}</td>
                                 <td>
-                                    <a href='edit_mhs.php?id={$row['id']}' class='btn btn-warning btn-sm'>Edit</a>
-                                    <a href='hapus_mhs.php?id={$row['id']}' class='btn btn-danger btn-sm'>Hapus</a>
-                                    <a href='cetakKRS.php?id={$row['id']}' class='btn btn-info btn-sm'>Lihat</a>
+                                    <ul class='matkul-list'>";
+                                    
+                            foreach ($limitedMatkul as $matkul) {
+                                echo "<li>{$matkul}</li>";
+                            }
+                            
+                            if ($remainingMatkulCount > 0) {
+                                echo "<li>...dan {$remainingMatkulCount} mata kuliah lainnya</li>";
+                            }
+
+                            echo "</ul>
+                                </td>
+                                <td>
+                                    <a href='edit_mhs.php?id={$row['mhs_id']}' class='btn btn-warning btn-sm'>Edit</a>
+                                    <a href='cetakKRS.php?id={$row['mhs_id']}' class='btn btn-info btn-sm'>Lihat</a>
+                                    <a href='hapus_mhs.php?id={$row['mhs_id']}' class='btn btn-danger btn-sm'>Hapus</a>
                                 </td>
                             </tr>";
                             $no++;
@@ -119,7 +161,7 @@ include('koneksi.php'); // Koneksi ke database
                 </table>
             </div>
         </div>
-                    </div>                    
+    </div>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
